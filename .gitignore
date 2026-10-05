@@ -1,0 +1,46 @@
+# Build Directories
+build/
+bin/
+obj/
+Debug/
+Release/
+x64/
+x86/
+
+# Visual Studio files
+.vs/
+*.user
+*.suo
+*.slnx.sqlite
+*.VC.db
+*.ipch
+
+# Compilation artifacts
+*.obj
+*.ilk
+*.pdb
+*.idb
+*.tlog
+*.recipe
+*.log
+*.exe
+*.dll
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local agent metadata
+.gemini/
