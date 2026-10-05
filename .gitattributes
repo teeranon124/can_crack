@@ -1,0 +1,5 @@
+# Language detection overrides for GitHub Linguist
+# Ensure C++ is recognized as the dominant primary language
+tools/** linguist-vendored
+assets/** linguist-vendored
+data/** linguist-vendored

@@ -12,10 +12,10 @@ endif()
 
 find_package(OpenCV REQUIRED)
 
-include_directories(${OpenCV_INCLUDE_DIRS} src)
+include_directories(${OpenCV_INCLUDE_DIRS} .)
 
 add_executable(can_crack_inspector
-    src/main.cpp
+    main.cpp
 )
 
 target_link_libraries(can_crack_inspector PRIVATE ${OpenCV_LIBS})

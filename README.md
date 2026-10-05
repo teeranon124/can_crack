@@ -1,6 +1,6 @@
 # 🥫 ตรวจจับรอยแตกขอบฝากระป๋องด้วย OpenCV & ANN (Can Rim Crack Detection)
 
-ระบบตรวจสอบหา **รอยแตกที่แนวตะเข็บขอบฝากระป๋อง (Seam Flange Crack)** อัตโนมัติด้วย OpenCV และ Shallow Neural Network (`ANN_MLP`) พัฒนาด้วยภาษา C++ และ Python โดยใช้คณิตศาสตร์การแปลงพิกัดและการประมวลผลภาพแบบตรงไปตรงมา ไม่ต้องพึ่งพาโมเดล Deep Learning ขนาดใหญ่ ทำให้ทำงานได้เร็วระดับไมโครวินาทีและประหยัดสเปกเครื่อง เหมาะสำหรับงาน Machine Vision บนสายการผลิตจริงแบบ Real-time ครับ
+ระบบตรวจสอบหา **รอยแตกที่แนวตะเข็บขอบฝากระป๋อง (Seam Flange Crack)** อัตโนมัติด้วยภาษา C++ และ OpenCV ร่วมกับ Shallow Neural Network (`ANN_MLP`) โดยใช้คณิตศาสตร์การแปลงพิกัด Polar และการวิเคราะห์สัญญาณความสว่างแบบตรงไปตรงมา ไม่ต้องพึ่งพาโมเดล Deep Learning ขนาดใหญ่ ทำให้ทำงานได้เร็วระดับไมโครวินาที (3.4 µs) และประหยัดสเปกเครื่อง เหมาะสำหรับระบบตรวจสอบบนสายการผลิตจริงแบบ Real-time ครับ
 
 ---
 
@@ -204,52 +204,55 @@ if (result == 0) {
 
 ```bash
 can_crack/
-├── src/
-│   └── main.cpp             # โค้ดหลักภาษา C++ พัฒนาต่อจาก Lab4Contour.cpp
-├── python/
-│   ├── inspect_rim.py       # สคริปต์ Python สำหรับรันและทดสอบระบบได้ทันที
-│   ├── train_mlp.py         # สคริปต์ทดสอบเทรนและประเมินโมเดล model.xml
-│   └── generate_real_lab_assets.py  # สคริปต์สร้างภาพและกราฟขั้นตอนแล็บจากภาพกระป๋องจริง Bad(1) และ Good(1)
+├── main.cpp                 # โค้ดหลักภาษา C++ พัฒนาต่อจาก Lab4Contour.cpp (Core Engine)
+├── CMakeLists.txt           # สคริปต์สำหรับคอมไพล์ C++ ด้วย CMake
+├── build.bat                # สคริปต์ดับเบิลคลิกคอมไพล์ C++ บน Windows
 ├── models/
 │   └── model.xml            # โมเดลน้ำหนัก `ANN_MLP` โครงสร้าง 120-15-2 จากแล็บ
 ├── data/
-│   ├── samples/             # ภาพตัวอย่าง crack0 - crack8 และภาพกระป๋อง
+│   ├── raw_cans/            # ภาพกระป๋องจริง Bad (1-10) และ Good (1-6)
+│   ├── samples/             # ภาพตัวอย่าง crack0 - crack8 และแถบขอบกระป๋อง
 │   ├── reference_patches/   # ภาพแพทช์มาตรฐานอ้างอิง p00 - p50
 │   └── dataset/             # ข้อมูล 120-d (in.txt) และเฉลย (out.txt) 1,386 ตัวอย่าง
 ├── assets/
 │   └── lab_steps/           # ภาพผลลัพธ์ขั้นตอนจริงทั้งหมดที่ใช้ใน README นี้
-├── CMakeLists.txt           # สคริปต์สำหรับคอมไพล์ C++ ด้วย CMake
-├── build.bat                # สคริปต์ดับเบิลคลิกคอมไพล์ C++ บน Windows
-└── requirements.txt         # ไลบรารี Python สำหรับรันโปรเจกต์
+└── tools/                   # สคริปต์เสริม (สำหรับเทรนโมเดลและวาดรูปประกอบ README)
+    ├── generate_real_lab_assets.py  # สคริปต์พลอตกราฟและทำภาพประกอบใน README
+    ├── train_mlp.py                 # สคริปต์ประเมินผลโมเดลและคำนวณสถิติ
+    └── inspect_rim.py               # สคริปต์รันตรวจสอบทางเลือก
 ```
 
 ---
 
-## 🚀 วิธีการทดสอบรันโค้ด
+## 🚀 วิธีการคอมไพล์และรัน C++ บน Windows
 
-### แบบที่ 1: รันด้วย Python (สะดวกและรวดเร็ว)
+โปรเจกต์นี้มีสคริปต์ `build.bat` ให้เรียบร้อย สามารถเปิด Command Prompt แล้วรันได้ทันที:
 
-```bash
-# 1. ติดตั้งไลบรารี
-pip install -r requirements.txt
+### 1. คอมไพล์โปรเจกต์
+```cmd
+build.bat
+```
+*(สคริปต์จะเรียก CMake และ MSVC เพื่อสร้างไฟล์รัน `build\bin\Release\can_crack_inspector.exe` พร้อมคัดลอก OpenCV DLL ให้เสร็จสรรพ)*
 
-# 2. ทดสอบตรวจสอบภาพที่มีรอยแตก
-python python/inspect_rim.py --image data/samples/crack1.jpg --output assets/result.png
+### 2. รันโปรแกรมตรวจสอบชิ้นงาน
+```cmd
+:: ทดสอบกระป๋องจริงที่มีรอยแตกที่แนวตะเข็บ (CRACK - FAIL)
+build\bin\Release\can_crack_inspector.exe "data\raw_cans\Bad (1).jpg" models\model.xml
 
-# 3. ทดสอบตรวจสอบภาพปกติ
-python python/inspect_rim.py --image data/samples/crack5.jpg
-
-# 4. ทดสอบประเมินโมเดลกับข้อมูล 1,386 ตัวอย่าง
-python python/train_mlp.py --evaluate_only
+:: ทดสอบกระป๋องปกติที่ไม่มีรอยแตก (NORMAL - PASS)
+build\bin\Release\can_crack_inspector.exe "data\raw_cans\Good (1).jpg" models\model.xml
 ```
 
-### แบบที่ 2: คอมไพล์และรัน C++ บน Windows
+---
 
-โปรเจกต์มีสคริปต์ `build.bat` ให้เรียบร้อย สามารถรันผ่าน Command Prompt ได้เลย:
-```cmd
-:: คอมไพล์โปรเจกต์ C++
-build.bat
+### 🛠️ เครื่องมือเสริมสำหรับทดสอบ (Optional Python Tools)
+สำหรับใครที่ต้องการทดสอบประเมินโมเดลหรือสร้างรูปประกอบ README ใหม่ สามารถใช้สคริปต์ในโฟลเดอร์ `tools/` ได้ครับ:
+```bash
+pip install -r requirements.txt
 
-:: รันโปรแกรมตรวจสอบ
-build\bin\Release\can_crack_inspector.exe data\samples\crack1.jpg models\model.xml
+# ประเมินสถิติความแม่นยำของโมเดลกับข้อมูล 1,386 ตัวอย่าง
+python tools/train_mlp.py --evaluate_only
+
+# สร้างภาพขั้นตอนทั้งหมดประกอบ README ใหม่
+python tools/generate_real_lab_assets.py
 ```
