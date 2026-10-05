@@ -17,25 +17,63 @@ os.makedirs("assets/lab_steps", exist_ok=True)
 bad_can = cv2.imread(r"data\raw_cans\Bad (1).jpg")
 good_can = cv2.imread(r"data\raw_cans\Good (1).jpg")
 
-fig, axes = plt.subplots(1, 2, figsize=(10, 5), facecolor='white')
+fig, axes = plt.subplots(1, 2, figsize=(11, 5.5), facecolor='white')
 axes[0].imshow(cv2.cvtColor(bad_can, cv2.COLOR_BGR2RGB))
-axes[0].set_title("(A) Raw Input: Bad (1).jpg - Flange Crack Defect", fontsize=11, fontweight='bold', pad=10)
+axes[0].set_title("(A) Bad (1).jpg - Flange Crack Defect", fontsize=12, fontweight='bold', pad=10)
 axes[0].axis('off')
 
-# annotate crack location on Bad (1).jpg (around 5 o'clock on outer rim)
-axes[0].annotate("Micro-Crack Defect\n(Flange rim crack)", xy=(635, 830), xytext=(680, 930),
-                 arrowprops=dict(arrowstyle="->", color="red", lw=2.5),
-                 color="red", fontweight='bold', fontsize=10,
-                 bbox=dict(boxstyle="round,pad=0.3", fc="#ffe6e6", ec="red", lw=1.2))
+# Circle around defect at true coordinates (838, 348) (~2 o'clock)
+circle_bad = plt.Circle((838, 348), 35, color='red', fill=False, lw=2.5, linestyle='-')
+axes[0].add_patch(circle_bad)
+
+# Arrow from text to defect
+axes[0].annotate("Crack Defect\n(~2 o'clock position)",
+                 xy=(838, 348), xytext=(480, 140),
+                 arrowprops=dict(arrowstyle="->", color="red", lw=2.2),
+                 color="red", fontweight='bold', fontsize=10.5,
+                 bbox=dict(boxstyle="round,pad=0.4", fc="#ffe6e6", ec="red", lw=1.5))
+
+# Inset zoom of the crack defect
+axins_bad = axes[0].inset_axes([0.04, 0.04, 0.38, 0.38])
+crop_bad = bad_can[348-100:348+100, 838-120:838+80]
+axins_bad.imshow(cv2.cvtColor(crop_bad, cv2.COLOR_BGR2RGB))
+axins_bad.set_xticks([])
+axins_bad.set_yticks([])
+for spine in axins_bad.spines.values():
+    spine.set_edgecolor('red')
+    spine.set_linewidth(2.2)
+axins_bad.set_title("Zoom: Crack Area", fontsize=9.5, color='red', fontweight='bold', pad=4)
 
 axes[1].imshow(cv2.cvtColor(good_can, cv2.COLOR_BGR2RGB))
-axes[1].set_title("(B) Raw Input: Good (1).jpg - Normal Seam", fontsize=11, fontweight='bold', pad=10)
+axes[1].set_title("(B) Good (1).jpg - Normal Flange (No Crack)", fontsize=12, fontweight='bold', pad=10)
 axes[1].axis('off')
+
+# Circle around corresponding normal rim at (773, 323)
+circle_good = plt.Circle((773, 323), 35, color='#00aa00', fill=False, lw=2.5, linestyle='-')
+axes[1].add_patch(circle_good)
+
+axes[1].annotate("Normal Continuous Rim\n(No crack notch)",
+                 xy=(773, 323), xytext=(430, 140),
+                 arrowprops=dict(arrowstyle="->", color="#00aa00", lw=2.2),
+                 color="#008800", fontweight='bold', fontsize=10.5,
+                 bbox=dict(boxstyle="round,pad=0.4", fc="#eafbea", ec="#00aa00", lw=1.5))
+
+# Normal seam zoom inset
+axins_good = axes[1].inset_axes([0.04, 0.04, 0.38, 0.38])
+crop_good = good_can[323-100:323+100, 773-100:773+100]
+axins_good.imshow(cv2.cvtColor(crop_good, cv2.COLOR_BGR2RGB))
+axins_good.set_xticks([])
+axins_good.set_yticks([])
+for spine in axins_good.spines.values():
+    spine.set_edgecolor('#00aa00')
+    spine.set_linewidth(2.2)
+axins_good.set_title("Zoom: Normal Seam", fontsize=9.5, color='#008800', fontweight='bold', pad=4)
 
 plt.tight_layout()
 plt.savefig("assets/lab_steps/0_raw_input_comparison.png", dpi=200, bbox_inches='tight')
 plt.close()
 print("Generated 0_raw_input_comparison.png from real Bad (1).jpg and Good (1).jpg")
+
 
 # -----------------------------------------------------------------------------
 # Process Bad (1).jpg through exact Lab4Contour.cpp pipeline
