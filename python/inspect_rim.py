@@ -17,44 +17,35 @@ import numpy as np
 def find_can_lid(image_gray):
     """
     Stage 1: Can Boundary Localization using Sobel gradient and Hu Moment invariant.
-    A genuine circular lid has a theoretical first Hu moment hu[0] ~= 1/(2*pi) = 0.159.
-    Returns: (cropped_lid, bounding_rect)
+    Matches Lab4Contour.cpp (hu[0] < 0.18).
     """
     blurred = cv2.GaussianBlur(image_gray, (5, 5), 0)
     
-    # Sobel gradient in X and Y
-    grad_x = cv2.Sobel(blurred, cv2.CV_16S, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(blurred, cv2.CV_16S, 0, 1, ksize=3)
-    abs_x = cv2.convertScaleAbs(grad_x)
-    abs_y = cv2.convertScaleAbs(grad_y)
-    grad = cv2.addWeighted(abs_x, 0.5, abs_y, 0.5, 0)
+    grad_x = cv2.convertScaleAbs(cv2.Sobel(blurred, cv2.CV_16S, 1, 0, 3))
+    grad_y = cv2.convertScaleAbs(cv2.Sobel(blurred, cv2.CV_16S, 0, 1, 3))
+    grad = cv2.addWeighted(grad_x, 0.5, grad_y, 0.5, 0)
     
-    # Binary inverse thresholding (inside circular boundary becomes solid)
-    _, thresh = cv2.threshold(grad, 30, 255, cv2.THRESH_BINARY_INV)
+    _, thresh = cv2.threshold(grad, 30, 255, 1)
     
     contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     
-    frame_area = image_gray.shape[0] * image_gray.shape[1]
-    best_contour = None
     max_area = 0
-    best_rect = None
-    
-    for ct in contours:
-        area = cv2.contourArea(ct)
-        # Filter out whole frame boundaries and tiny noise specs
-        if 5000 < area < (frame_area * 0.9):
-            mu = cv2.moments(ct)
-            hu = cv2.HuMoments(mu).flatten()
-            # Circular invariant check: ideal circle has hu[0] ~= 0.159
-            if hu[0] < 0.22 and area > max_area:
-                max_area = area
-                best_contour = ct
-                best_rect = cv2.boundingRect(ct)
-                
-    if best_rect is not None:
-        x, y, w, h = best_rect
-        cropped_lid = image_gray[y:y+h, x:x+w]
-        return cropped_lid, best_rect
+    max_index = -1
+    for i, ct in enumerate(contours):
+        poly = cv2.approxPolyDP(ct, 1, True)
+        if len(poly) > 5:
+            mu = cv2.moments(poly)
+            if mu['m00'] > 0:
+                hu = cv2.HuMoments(mu).flatten()
+                area = cv2.contourArea(poly)
+                if hu[0] < 0.18 and area > max_area:
+                    max_area = area
+                    max_index = i
+                    
+    if max_index >= 0:
+        best_poly = cv2.approxPolyDP(contours[max_index], 1, True)
+        rect = cv2.boundingRect(best_poly)
+        return image_gray[rect[1]:rect[1]+rect[3], rect[0]:rect[0]+rect[2]], rect
         
     return image_gray, (0, 0, image_gray.shape[1], image_gray.shape[0])
 
@@ -66,62 +57,43 @@ def unwrap_can_rim(lid_gray, rim_width=50):
     """
     h, w = lid_gray.shape[:2]
     center = (w / 2.0, h / 2.0)
-    max_radius = min(w, h) / 2.0
+    radius = w / 2.0
     
-    # Unroll circular lid into polar coordinates
-    polar_img = cv2.linearPolar(lid_gray, center, max_radius, cv2.INTER_LINEAR)
-    
-    # Outer rim is located at the outermost rim_width pixels in radius
+    polar_img = cv2.linearPolar(lid_gray, center, radius, 1)
     outer_rim = polar_img[:, polar_img.shape[1] - rim_width:]
-    
-    # Rotate 90 CCW so perimeter trajectory runs horizontally along columns
     rim_horizontal = cv2.rotate(outer_rim, cv2.ROTATE_90_COUNTERCLOCKWISE)
     
     return rim_horizontal
 
 
-def detect_crack_region(rim_strip, intensity_threshold=5000, pad=18):
+def detect_crack_region(rim_strip, intensity_threshold=5000):
     """
-    Stage 4: Column-wise intensity projection and defect gap detection.
-    Scans for drops in intensity caused by physical metal cracks or notches.
-    
-    Seam Recovery Logic:
-    If a defect touches column 0 or the end column (split across the 0/360 deg seam),
-    we flag seam_split=True so the caller can rotate the can 90 degrees and unwrap again.
+    Stage 4 & 5: Scan xleft and xright using exact Lab4Contour.cpp loop.
     """
     col_sums = np.sum(rim_strip, axis=0, dtype=np.int32)
-    high_mask = col_sums > intensity_threshold
-    high_indices = np.where(high_mask)[0]
+    hist_th = np.where(col_sums > intensity_threshold, 100, 0)
     
-    hist_th = np.where(high_mask, 100, 0)
-    
-    if len(high_indices) == 0:
-        return None, 0, 0, hist_th, False
-        
-    valleys = []
-    in_valley = False
-    v_start = 0
-    for x in range(high_indices[0], high_indices[-1] + 1):
-        if not high_mask[x] and not in_valley:
-            in_valley = True
-            v_start = x
-        elif high_mask[x] and in_valley:
-            in_valley = False
-            valleys.append((v_start, x - 1))
+    x_left = 0
+    for x in range(rim_strip.shape[1]):
+        if hist_th[x] == 0:
+            x_left = x
+            break
             
-    if len(valleys) > 0:
-        valleys.sort(key=lambda v: (v[1] - v[0]), reverse=True)
-        v_l, v_r = valleys[0]
-        x_left = max(0, v_l - pad)
-        x_right = min(rim_strip.shape[1], v_r + 1 + pad)
-        is_seam_split = (x_left == 0 or x_right >= rim_strip.shape[1])
-        return rim_strip[:, x_left:x_right], x_left, x_right, hist_th, is_seam_split
+    x_right = rim_strip.shape[1] - 1
+    for x in range(rim_strip.shape[1] - 1, -1, -1):
+        if hist_th[x] == 0:
+            x_right = x
+            break
+            
+    is_seam_split = (x_left == 0 or x_right == 0 or x_right == rim_strip.shape[1] - 1)
+    
+    roi = rim_strip[:, x_left:x_right]
+    if roi.shape[1] == 0:
+        mid = rim_strip.shape[1] // 2
+        roi = rim_strip[:, max(0, mid-30):min(rim_strip.shape[1], mid+30)]
         
-    # No valley found (smooth normal rim)
-    mid = rim_strip.shape[1] // 2
-    x_left = max(0, mid - 30)
-    x_right = min(rim_strip.shape[1], mid + 30)
-    return rim_strip[:, x_left:x_right], x_left, x_right, hist_th, False
+    return roi, x_left, x_right, hist_th, is_seam_split
+
 
 
 def extract_projection_features(roi_patch, target_size=(120, 40)):
@@ -275,7 +247,7 @@ def inspect_image(image_path, model_path="models/model.xml", output_dashboard=No
     frame = cv2.imread(image_path)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
     
-    # Detect input mode: pre-cropped patch, unwrapped strip, circular lid, or full frame
+    # Detect input mode: pre-cropped patch, unwrapped strip, or full frame / can lid
     h, w = gray.shape[:2]
     float_ar = float(w) / h
     if w < 200 and h < 100:
@@ -288,26 +260,21 @@ def inspect_image(image_path, model_path="models/model.xml", output_dashboard=No
         hist_th = None
         is_seam_split = False
     elif float_ar > 3.0:
-        # Mode 2: Unwrapped rim strip (crack1, crack4)
+        # Mode 2: Pre-unwrapped rim strip (crack1, crack4)
         lid_crop = gray
         rim_strip = gray
         crack_roi, x_left, x_right, hist_th, is_seam_split = detect_crack_region(rim_strip)
-    elif 0.8 < float_ar < 1.2 and w >= 200:
-        # Mode 3: Circular lid crop
-        lid_crop = gray
-        rim_strip = unwrap_can_rim(lid_crop)
-        crack_roi, x_left, x_right, hist_th, is_seam_split = detect_crack_region(rim_strip)
     else:
-        # Mode 4: Full camera frame
+        # Mode 3: Full camera frame or circular lid
         lid_crop, _ = find_can_lid(gray)
         rim_strip = unwrap_can_rim(lid_crop)
         crack_roi, x_left, x_right, hist_th, is_seam_split = detect_crack_region(rim_strip)
-    
-    # Seam recovery: if crack is split on boundary seam, rotate lid 90 CCW and re-run
-    if is_seam_split and lid_crop is not None and lid_crop.shape[0] == lid_crop.shape[1]:
-        lid_crop = cv2.rotate(lid_crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        rim_strip = unwrap_can_rim(lid_crop)
-        crack_roi, x_left, x_right, hist_th, _ = detect_crack_region(rim_strip)
+        
+        # Seam recovery: if crack is split on boundary seam, rotate lid 90 CCW and re-run
+        if is_seam_split:
+            lid_crop = cv2.rotate(lid_crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            rim_strip = unwrap_can_rim(lid_crop)
+            crack_roi, x_left, x_right, hist_th, _ = detect_crack_region(rim_strip)
         
     # If no defect gap found, extract middle section as normal reference patch
     if crack_roi is None or crack_roi.size == 0:

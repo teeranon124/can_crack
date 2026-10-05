@@ -29,26 +29,7 @@ using namespace cv::ml;
 using namespace std;
 
 // ----------------------------------------------------------------------------
-// Stage 1: Circular Lid Contour Verification using Hu Moments
-// ----------------------------------------------------------------------------
-// Theoretical fact: An ideal solid circle has its first Hu moment hu[0] = 1 / (2 * pi) ~= 0.159.
-// Machine conveyor borders, straight edges, and debris will produce hu[0] > 0.25.
-bool isCircularContour(const vector<Point>& contour)
-{
-    if (contour.size() < 6) return false;
-
-    Moments mu = moments(contour);
-    if (mu.m00 <= 0.0) return false;
-
-    double hu[7];
-    HuMoments(mu, hu);
-
-    // hu[0] < 0.22 accepts circular and slightly elliptical metal can lids
-    return (hu[0] < 0.22);
-}
-
-// ----------------------------------------------------------------------------
-// Stage 1: Can Boundary Localization & Circular Lid Extraction
+// Stage 1: Can Boundary Localization & Circular Lid Extraction (hu[0] < 0.18)
 // ----------------------------------------------------------------------------
 Mat extractCanLid(const Mat& srcGray, Rect& outBoundingBox)
 {
@@ -56,15 +37,13 @@ Mat extractCanLid(const Mat& srcGray, Rect& outBoundingBox)
 
     GaussianBlur(srcGray, blurred, Size(5, 5), 0, 0);
 
-    // Compute gradients along X and Y axes (Sobel kernel size 3)
     Sobel(blurred, gradX, CV_16S, 1, 0, 3);
     Sobel(blurred, gradY, CV_16S, 0, 1, 3);
     convertScaleAbs(gradX, absGradX);
     convertScaleAbs(gradY, absGradY);
     addWeighted(absGradX, 0.5, absGradY, 0.5, 0, grad);
 
-    // Invert threshold so solid can interior forms a closed white region
-    threshold(grad, binaryThresh, 30, 255, THRESH_BINARY_INV);
+    threshold(grad, binaryThresh, 30, 255, 1);
 
     vector<vector<Point>> contours;
     vector<Vec4i> hierarchy;
@@ -72,29 +51,37 @@ Mat extractCanLid(const Mat& srcGray, Rect& outBoundingBox)
 
     double maxArea = 0;
     int bestIndex = -1;
-    double frameArea = srcGray.cols * srcGray.rows;
 
     for (size_t i = 0; i < contours.size(); i++)
     {
-        double area = contourArea(contours[i]);
-        // Filter out whole frame borders (>90% frame) and tiny noise specs (<5000px)
-        if (area > 5000 && area < (frameArea * 0.9))
+        vector<Point> poly;
+        approxPolyDP(contours[i], poly, 1, true);
+        if (poly.size() > 5)
         {
-            if (isCircularContour(contours[i]) && area > maxArea)
+            Moments mu = moments(poly);
+            if (mu.m00 > 0.0)
             {
-                maxArea = area;
-                bestIndex = static_cast<int>(i);
+                double hu[7];
+                HuMoments(mu, hu);
+                double area = contourArea(poly);
+                if (hu[0] < 0.18 && area > maxArea)
+                {
+                    maxArea = area;
+                    bestIndex = static_cast<int>(i);
+                }
             }
         }
     }
 
     if (bestIndex >= 0)
     {
-        outBoundingBox = boundingRect(contours[bestIndex]);
+        vector<Point> bestPoly;
+        approxPolyDP(contours[bestIndex], bestPoly, 1, true);
+        outBoundingBox = boundingRect(bestPoly);
         return srcGray(outBoundingBox).clone();
     }
 
-    // Fallback: If no single contour dominates, assume entire image is already cropped lid
+    // Fallback: If no contour matches, assume entire image is already cropped lid
     outBoundingBox = Rect(0, 0, srcGray.cols, srcGray.rows);
     return srcGray.clone();
 }
@@ -140,53 +127,36 @@ Mat detectDefectRegion(const Mat& rimStrip, int& xLeft, int& xRight, vector<int>
         histTh[x] = (sum > intensityThreshold) ? 100 : 0;
     }
 
-    // Find valleys: contiguous intervals where intensity drops below threshold between bright metal shoulders
-    vector<int> highIndices;
+    int xleft = 0;
     for (int x = 0; x < rimStrip.cols; x++)
     {
-        if (histTh[x] > 0) highIndices.push_back(x);
-    }
-
-    vector<pair<int, int>> valleys;
-    if (!highIndices.empty())
-    {
-        bool inValley = false;
-        int vStart = 0;
-        for (int x = highIndices.front(); x <= highIndices.back(); x++)
+        if (histTh[x] == 0)
         {
-            if (histTh[x] == 0 && !inValley)
-            {
-                inValley = true;
-                vStart = x;
-            }
-            else if (histTh[x] > 0 && inValley)
-            {
-                inValley = false;
-                valleys.push_back({ vStart, x - 1 });
-            }
+            xleft = x;
+            break;
         }
     }
 
-    if (!valleys.empty())
+    int xright = rimStrip.cols - 1;
+    for (int x = rimStrip.cols - 1; x >= 0; x--)
     {
-        // Pick the most significant valley by width
-        auto bestValley = *max_element(valleys.begin(), valleys.end(),
-            [](const pair<int, int>& a, const pair<int, int>& b) {
-                return (a.second - a.first) < (b.second - b.first);
-            });
-
-        xLeft = max(0, bestValley.first - pad);
-        xRight = min(rimStrip.cols, bestValley.second + 1 + pad);
-        isSeamSplit = (xLeft == 0 || xRight >= rimStrip.cols);
-
-        return rimStrip(Rect(xLeft, 0, xRight - xLeft, rimStrip.rows)).clone();
+        if (histTh[x] == 0)
+        {
+            xright = x;
+            break;
+        }
     }
 
-    // If no prominent valley, extract center patch as normal reference
-    int mid = rimStrip.cols / 2;
-    xLeft = max(0, mid - 30);
-    xRight = min(rimStrip.cols, mid + 30);
-    isSeamSplit = false;
+    xLeft = xleft;
+    xRight = xright;
+    isSeamSplit = (xLeft == 0 || xRight == 0 || xRight >= rimStrip.cols - 1);
+
+    if (xRight <= xLeft)
+    {
+        int mid = rimStrip.cols / 2;
+        xLeft = max(0, mid - 30);
+        xRight = min(rimStrip.cols, mid + 30);
+    }
 
     return rimStrip(Rect(xLeft, 0, xRight - xLeft, rimStrip.rows)).clone();
 }
@@ -395,27 +365,20 @@ int main(int argc, char** argv)
         rimStrip = gray.clone();
         crackRoi = detectDefectRegion(rimStrip, xLeft, xRight, histTh, isSeamSplit);
     }
-    else if (aspectRatio > 0.8f && aspectRatio < 1.2f && gray.cols >= 200)
-    {
-        // Mode 3: Image is a circular lid crop
-        lidCrop = gray.clone();
-        rimStrip = unwrapCanRim(lidCrop);
-        crackRoi = detectDefectRegion(rimStrip, xLeft, xRight, histTh, isSeamSplit);
-    }
     else
     {
-        // Mode 4: Full factory camera frame
+        // Mode 3: Full camera frame or circular lid
         lidCrop = extractCanLid(gray, lidRect);
         rimStrip = unwrapCanRim(lidCrop);
         crackRoi = detectDefectRegion(rimStrip, xLeft, xRight, histTh, isSeamSplit);
-    }
 
-    // Seam recovery: if defect touches boundary cut, rotate 90 CCW and re-unwrap
-    if (isSeamSplit && lidCrop.rows == lidCrop.cols)
-    {
-        rotate(lidCrop, lidCrop, ROTATE_90_COUNTERCLOCKWISE);
-        rimStrip = unwrapCanRim(lidCrop);
-        crackRoi = detectDefectRegion(rimStrip, xLeft, xRight, histTh, isSeamSplit);
+        // Seam recovery: if defect touches boundary cut, rotate 90 CCW and re-unwrap
+        if (isSeamSplit)
+        {
+            rotate(lidCrop, lidCrop, ROTATE_90_COUNTERCLOCKWISE);
+            rimStrip = unwrapCanRim(lidCrop);
+            crackRoi = detectDefectRegion(rimStrip, xLeft, xRight, histTh, isSeamSplit);
+        }
     }
 
     // Stage 6: 120-d Feature extraction
